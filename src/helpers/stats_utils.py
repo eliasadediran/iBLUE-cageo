@@ -6,7 +6,75 @@ from scipy.stats import norm, gaussian_kde
 from openpyxl import Workbook
 from src.helpers import plot_utils
 
-def uncertainty_comparison_for_multi(residuals, uncertainties, interp_mask, eps=1e-12):
+def bootstrap_by_gaps(
+    residuals,
+    uncertainties,
+    column_indices,
+    interp_mask=None,
+    n_boot=500,
+    ci=95,
+    min_block_width=2,
+    fraction=0.1
+):
+    abs_res = np.abs(residuals)
+    unc = uncertainties
+    valid = np.isfinite(abs_res) & np.isfinite(unc)
+
+    if interp_mask is not None:
+        valid = valid & (~interp_mask)
+
+    column_indices = np.asarray(column_indices)
+
+    # --- Build candidate blocks (consecutive gaps) ---
+    candidate_blocks = []
+    for i in range(len(column_indices) - 1):
+        start = column_indices[i]
+        end = column_indices[i + 1]
+        if end - start >= min_block_width:
+            candidate_blocks.append((start, end))
+
+    if len(candidate_blocks) == 0:
+        raise ValueError("No valid blocks found.")
+
+    # --- Compute max_gaps_per_block from physical size ---
+    if fraction is not None:
+        n_cols = residuals.shape[1]
+        max_gaps_per_block = max(1, int(n_cols * fraction))
+    else:
+        max_gaps_per_block = 20  # default fallback
+
+    p_boot = []
+
+    for _ in range(n_boot):
+        start_idx = np.random.randint(0, len(candidate_blocks))
+        n_gaps = np.random.randint(1, max_gaps_per_block + 1)
+        end_idx = min(start_idx + n_gaps, len(candidate_blocks))
+
+        c0 = candidate_blocks[start_idx][0]
+        c1 = candidate_blocks[end_idx - 1][1]
+
+        r_block = abs_res[:, c0:c1]
+        u_block = unc[:, c0:c1]
+        m_block = valid[:, c0:c1]
+
+        if np.any(m_block):
+            indicators = u_block[m_block] >= r_block[m_block]
+            p_boot.append(np.mean(indicators))
+
+    p_boot = np.array(p_boot) * 100
+    alpha = 100 - ci
+
+    ci_stats = {
+        "mean": np.mean(p_boot),
+        "ci_lower": np.percentile(p_boot, alpha/2),
+        "ci_upper": np.percentile(p_boot, 100-alpha/2),
+        "std": np.std(p_boot),
+        "boot": p_boot
+    }
+
+    return ci_stats
+
+def uncertainty_comparison_for_multi(residuals, uncertainties, interp_mask, thresholds, eps=1e-12):
 
     if residuals.ndim < 2:
         residuals = residuals.reshape(1,-1)
@@ -53,6 +121,45 @@ def uncertainty_comparison_for_multi(residuals, uncertainties, interp_mask, eps=
         corr = np.corrcoef(unc, abs_res)[0, 1]
     else:
         corr = np.nan
+
+    # Tail distribution
+    # --- Normalize ---
+    z = (residuals / uncertainties)
+    z = z[valid]
+    z = z[np.isfinite(z)]
+    z_flat = z.flatten()
+
+    # --- Stats ---
+    mean_z = np.mean(z_flat)
+    var_z = np.var(z_flat)
+
+    # --- Tails ---
+    # --- Total count ---
+    N = len(z_flat)
+
+    # --- Gaussian references ---
+    ref = {"Mean": 0.0, "Variance": 1.0, "Coverage_1sigma": 0.6827, "Coverage_2sigma": 0.9545, "Coverage_3sigma": 0.9973,}
+
+    # threshold
+    # thresholds = (3, 5, 10)
+
+    # Tail references
+    ref_tails = {3: 0.0027, 5: 5.733e-7, 10: 7.62e-24}
+
+    tails = {t: np.mean(np.abs(z_flat) > t) for t in thresholds}
+
+    # --- Counts ---
+    tail_counts = {t: int(np.sum(np.abs(z_flat) > t)) for t in thresholds}
+
+    # --- Ratios vs Gaussian ---
+    tail_ratios = {t: tails[t] / ref_tails[t] if ref_tails[t] > 0 else np.nan for t in thresholds}
+
+    tail_stats = {
+        "tails": tails,
+        "ref_tails": ref_tails,
+        "tail_ratios": tail_ratios,
+        "tail_counts": tail_counts
+    }
 
     # -------------------------------------------------
     # SEVERITY OF UNDER-ESTIMATION
@@ -105,7 +212,7 @@ def uncertainty_comparison_for_multi(residuals, uncertainties, interp_mask, eps=
 
     reliability_error = np.mean(reliability_errors)
 
-    return pass_percentage, rmse, mae, mean_error, std_dev, sharp, corr, severity_mean, severity_tail, severity_score, over_mean, over_tail, over_penalty, reliability_error
+    return pass_percentage, rmse, mae, mean_error, std_dev, sharp, corr, severity_mean, severity_tail, severity_score, over_mean, over_tail, over_penalty, reliability_error, tail_stats
 
 
 def multi_uncertainty_comparison(
@@ -113,15 +220,18 @@ def multi_uncertainty_comparison(
     uncertainties_dict,
     resolution,
     desired_linespacing_meters=None,
+    column_indices = None,
     seabed=None,
     plot_grid=(3, 3),
     path=None,
     plot_boxplots=True,
     plot_reliability=True,
+    thresholds = {3,5,10},
     confidence_levels = [0.5, 0.68, 0.9, 0.95, 0.99],
     alpha = 0.8, # for computing severity score
     normalize_residual = True,
-    interp_mask=None
+    interp_mask=None,
+    bootstrap = True,
 ):
     """
     Compare multiple uncertainty surfaces against residuals in one figure.
@@ -144,7 +254,7 @@ def multi_uncertainty_comparison(
 
     # ---- Create figure ----
     nrows, ncols = plot_grid
-    fig, axes = plt.subplots(nrows=nrows, ncols=ncols, figsize=(18, 12), layout="constrained")
+    fig, axes = plt.subplots(nrows=nrows, ncols=ncols, figsize=(12, 8), layout="constrained")
 
     axes = axes.flatten()
     names = list(uncertainties_dict.keys())
@@ -156,7 +266,7 @@ def multi_uncertainty_comparison(
         # Compute stats
         (pass_percentage, rmse, mae, mean_error, std_dev, sharp, corr, severity_mean,
          severity_tail, severity_score, over_mean, over_tail, over_penalty,
-         reliability_error) = uncertainty_comparison_for_multi(residuals, uncertainty, interp_mask=interp_mask)
+         reliability_error, tail_stats) = uncertainty_comparison_for_multi(residuals, uncertainty, interp_mask=interp_mask, thresholds=thresholds)
 
         # Append stats for CSV
         results.append({
@@ -179,6 +289,20 @@ def multi_uncertainty_comparison(
             "Reliability score": reliability_error
         })
 
+        if bootstrap:
+            ci_stats = bootstrap_by_gaps(residuals, uncertainty, column_indices, n_boot=500, ci=95,
+                                         interp_mask=interp_mask, min_block_width=2, fraction=0.6)  # 500
+            # results["ci_stats"] = ci_stats
+            results[-1].update({"CI mean": ci_stats["mean"], "CI lower": ci_stats["ci_lower"], "CI upper": ci_stats["ci_upper"], "CI std": ci_stats["std"]})
+
+        for t in thresholds:
+            results[-1].update({
+            f"P_gt_{t}": tail_stats['tails'][t],
+            f"Gaussian_{t}": tail_stats['ref_tails'][t],
+            f"Ratio_{t}": tail_stats['tail_ratios'][t],
+            f"Count_{t}": tail_stats['tail_counts'][t],
+        })
+
         # Scatter comparison plot
         nonzero_idx = np.nonzero(
             (residuals != 0) & (~np.isnan(residuals)) & (uncertainty != 0)
@@ -197,7 +321,7 @@ def multi_uncertainty_comparison(
 
         # Title with stats
         ax.set_title(
-            f"{name}\nPass: {pass_percentage:.1f}%  RMSE: {rmse:.2f}  Bias: {mean_error:.2f}\n  "
+            f"{name}\nPass: {ci_stats['mean'] if bootstrap else pass_percentage:.1f}%  RMSE: {rmse:.2f}  Bias: {mean_error:.2f}\n  "
             f"Severity mean: {severity_mean:.2f} Severity: {severity_score:.2f}\n"
             f"Over_penalty: {over_penalty:.2f} MAE: {mae:.2f} Corr: {corr:.2f}", fontsize=14)
 
@@ -243,7 +367,7 @@ def multi_uncertainty_comparison(
             labels.append(name)
 
         # Combined boxplot
-        plt.figure(figsize=(10, 5))
+        plt.figure(figsize=(10, 8))
         plt.boxplot(data, patch_artist=True, labels=labels,
                     boxprops=dict(facecolor='lightgray', alpha=0.7),
                     medianprops=dict(color='red', linewidth=1.5))
