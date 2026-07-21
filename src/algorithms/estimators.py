@@ -6,40 +6,7 @@ from src.helpers import line_utils, data_utils, matrix_utils
 from scipy.stats import genextreme, norm
 from numpy.lib.stride_tricks import sliding_window_view
 
-# Collection of utility functions for FFT Computations for Uncertainty
-
-
-def compute_residual(data_strip: np.ndarray, normalize_residual=False) -> tuple[np.ndarray, np.ndarray]:
-    """
-    Compute the residual error from estimating the data using
-    linear interpolation
-
-    This function computes the estimate for the data strip
-    using the edge values and returns the residual error
-
-    Parameters
-    ----------
-
-    data_strip : np.array
-                 Bathymetric data strips re-aranged to a single strip
-
-    Returns
-    -------
-    residual : np.array
-               Difference of the interpolation from the input data strip
-
-    """
-
-    interpolated_strip = np.linspace(start=data_strip[:, 0],
-                                     stop=data_strip[:, -1],
-                                     num=data_strip.shape[1])
-
-    interpolated_strip = interpolated_strip.T
-    residual = data_strip - interpolated_strip
-    if normalize_residual:
-        residual = (residual/data_strip)*100
-    return residual, interpolated_strip
-
+# Spectral and Spatial Statistical Estimators for quantifying interpolation uncertainty
 def compute_energy(data: np.ndarray,
                    resolution: int,
                    method: str,
@@ -134,7 +101,7 @@ def spectral_estimator(
     segment_window = signal.windows.get_window(
         window=windowing, Nx=data.shape[1], fftbins=True)
 
-    # preprocess_signal, could be modified later
+    # preprocess_signal
     preprocessed_signal = data * segment_window
 
     energy, energy_freqs = compute_energy(preprocessed_signal,
@@ -142,6 +109,7 @@ def spectral_estimator(
                                             method,
                                             segment_window)
 
+    # frequency resolution
     df = 1.0 / (data.shape[1] * resolution)
 
     # compute contribution per frequency
@@ -149,7 +117,7 @@ def spectral_estimator(
     spatial_signal = create_spatial_signal(resolution, data.shape[1], linespacing)
     variance = (energy * df) @ spatial_signal
     if method == 'PSD95':
-        window_uncertainty = np.sqrt(variance) * 1.96 #2.6 #1.96 #2 #2.17
+        window_uncertainty = np.sqrt(variance) * 1.96
     elif method == 'PSD99':
         window_uncertainty = np.sqrt(variance) * 2.6
     else:
@@ -157,6 +125,7 @@ def spectral_estimator(
 
     # Remove edges when computing the original linespacing
     linespacing_width = int((data.shape[1]-2) / multiple)
+
     # Include edges again for the output strip
     output = np.zeros(shape=(data.shape[0], linespacing_width + 2))
     num_cols = output.shape[1]
@@ -193,8 +162,7 @@ def statistical_estimator(
     method: str = "SAR",
 ):
     """
-    Efficiently compute uncertainty estimates (diff, std, GEV, Gaussian)
-    using sliding window views instead of explicit loops.
+    Efficiently compute uncertainty estimates statistically using sliding window
 
     Parameters
     ----------
@@ -263,3 +231,34 @@ def statistical_estimator(
         return SMR
     elif method == 'ALL':
         return SAR, SER, SMR
+
+def compute_residual(data_strip: np.ndarray, normalize_residual=False) -> tuple[np.ndarray, np.ndarray]:
+    """
+    Compute the residual error from estimating the data using
+    linear interpolation
+
+    This function computes the estimate for the data strip
+    using the edge values and returns the residual error
+
+    Parameters
+    ----------
+
+    data_strip : np.array
+                 Bathymetric data strips re-aranged to a single strip
+
+    Returns
+    -------
+    residual : np.array
+               Difference of the interpolation from the input data strip
+
+    """
+
+    interpolated_strip = np.linspace(start=data_strip[:, 0],
+                                     stop=data_strip[:, -1],
+                                     num=data_strip.shape[1])
+
+    interpolated_strip = interpolated_strip.T
+    residual = data_strip - interpolated_strip
+    if normalize_residual:
+        residual = (residual/data_strip)*100
+    return residual, interpolated_strip
