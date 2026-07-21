@@ -120,43 +120,6 @@ def plot_figure_scatter(array, percentile, ndv, outdir, coordinate, marker, exte
                 bbox=dict(boxstyle='round', fc='none', ec=scale_colour))
 
 
-    if outline:
-        from matplotlib.patches import Rectangle
-        fig = plt.gcf()
-        # fig.canvas.draw()
-        axes = fig.get_axes()
-
-        bboxes = [ax.get_position() for ax in axes]
-
-        x0 = min(b.x0 for b in bboxes)
-        y0 = min(b.y0 for b in bboxes)
-        x1 = max(b.x1 for b in bboxes)
-        y1 = max(b.y1 for b in bboxes)
-
-        # independent padding (tune these)
-        # pad_left   = 0.12 #0.055
-        # pad_right  = 0.06 #0.017  # usually larger because of colorbar
-        # pad_bottom = 0.08 #0.005
-        # pad_top    = 0.08 #0.015
-
-        pad_left   = 0.055
-        pad_right  = 0.017  # usually larger because of colorbar
-        pad_bottom = 0.005
-        pad_top    = 0.017
-
-        fig.add_artist(
-            Rectangle(
-                (x0 - pad_left, y0 - pad_bottom),
-                (x1 - x0) + pad_left + pad_right,
-                (y1 - y0) + pad_bottom + pad_top,
-                transform=fig.transFigure,
-                fill=False,
-                edgecolor='black',
-                linewidth=1.2
-            )
-        )
-
-
     plt.savefig(f"{outdir}{seabed}_{title}_{spacing}m_scatter.png", bbox_inches='tight', dpi=600)
     plt.interactive(False)
     plt.show()
@@ -357,3 +320,124 @@ def plot_figure_mask(array, ndv, outdir, extent, xsize, ysize, res, seabed, spac
     plt.interactive(False)
     plt.show()
     # plt.close()
+
+def plot_cross_sections(depth,residuals,PSD_uncertainty, SSR_uncertainty, spectral_method, statistical_method, rows_keep, select_rows, column_indices, desired_linespacing_meters, resolution, outdir, seabed, normalize_residual=True, plot_location=True):
+    """
+    Plot uncertainty cross-sections and optionally plot their locations.
+
+    Parameters
+    ----------
+    depth : ndarray
+        Bathymetric grid.
+    residuals : ndarray
+        Residual grid.
+    PSD_uncertainty : ndarray
+        Spectral uncertainty estimates.
+    SSR_uncertainty : ndarray
+        Statistical uncertainty estimates.
+    """
+
+    plt.rcParams.update({
+        "font.size": 20,
+        "axes.titlesize": 22,
+        "axes.labelsize": 22,
+        "xtick.labelsize": 22,
+        "ytick.labelsize": 22,
+        "legend.fontsize": 22,
+    })
+
+    # Determine section boundaries
+    if desired_linespacing_meters < 50:
+        n_segments = 5
+        indices = np.linspace(0, len(column_indices) - 1, n_segments + 1, dtype=int)[1:]
+        x_lim_rights = column_indices[indices]
+
+    elif desired_linespacing_meters < 100:
+        n_segments = 4
+        indices = np.linspace(0, len(column_indices) - 1, n_segments + 1, dtype=int)[1:]
+        x_lim_rights = column_indices[indices]
+
+    elif desired_linespacing_meters < 200:
+        n_segments = 3
+        indices = np.linspace(0, len(column_indices) - 1, n_segments + 1, dtype=int)[1:]
+        x_lim_rights = column_indices[indices]
+
+    elif desired_linespacing_meters < 400:
+        x_lim_rights = [column_indices[len(column_indices) // 2],column_indices[-1]]
+
+    else:
+        x_lim_rights = [column_indices[-1]]
+
+    for select_row in select_rows:
+
+        # --------------------------------------------------------------
+        # Optional location plot
+        # --------------------------------------------------------------
+        if plot_location:
+            fig, ax = plt.subplots(figsize=(4, 3))
+            ax.grid(False)
+
+            im = ax.imshow(depth, cmap="viridis", aspect="equal")
+
+            cbar = fig.colorbar(im)
+            cbar.set_label("Depth (m)", fontsize=16)
+            cbar.ax.tick_params(labelsize=14)
+
+            xticks = ax.get_xticks()
+            ax.set_xticks(xticks)
+            ax.set_xticklabels([str(int(x * resolution)) for x in xticks])
+
+            yticks = ax.get_yticks()
+            ax.set_yticks(yticks)
+            ax.set_yticklabels([str(int(y * resolution)) for y in yticks])
+
+            ax.tick_params(axis="x", labelsize=16)
+            ax.tick_params(axis="y", labelsize=16)
+
+            ax.set_xlabel("West-East (m)", fontsize=18)
+            ax.set_ylabel("North-South (m)", fontsize=18)
+
+            ax.tick_params(axis="both",which="major",length=3,width=1,direction="out")
+
+            ax.hlines(y=select_row, xmin=0, xmax=depth.shape[1], color="red")
+
+            ax.set_xlim(0, depth.shape[1])
+            ax.set_ylim(depth.shape[0], 0)
+
+            ax.set_title(f"Row {int(select_row * resolution)}")
+
+            plt.savefig( f"{outdir}/{seabed}_row_{int(select_row * resolution)}.png", dpi=300, bbox_inches="tight")
+            plt.close()
+
+        # --------------------------------------------------------------
+        # Cross-section plots
+        # --------------------------------------------------------------
+        row_residual = np.abs(residuals[rows_keep, :][select_row])
+        row_psd = PSD_uncertainty[select_row]
+        row_ssr = SSR_uncertainty[select_row]
+
+        max_value = np.nanmax([np.nanmax(row_residual),np.nanmax(row_psd),np.nanmax(row_ssr)])
+
+        x_lim_left = 0
+
+        for i, x_lim_right in enumerate(x_lim_rights):
+
+            fig, ax = plt.subplots(figsize=(15, 5),constrained_layout=True)
+
+            ax.plot(row_residual, lw=2, label="Residuals")
+            ax.plot(row_psd, lw=2, label=spectral_method)
+            ax.plot(row_ssr, lw=2, label=statistical_method)
+
+            xticks = ax.get_xticks()
+            ax.set_xticks(xticks)
+            ax.set_xticklabels([str(int(x * resolution)) for x in xticks])
+
+            ax.set_xlim(x_lim_left, x_lim_right)
+            ax.set_ylim(0, max_value)
+            ax.set_xlabel("West-East (m)")
+            ax.set_ylabel( "Uncertainty (% of depth)" if normalize_residual else "Uncertainty (m)")
+            ax.set_title(f"Residual vs Estimated Uncertainty (Section {i + 1})")
+            ax.legend()
+            plt.savefig(f"{outdir}/{seabed}_{desired_linespacing_meters}m_{int(select_row * resolution)}_cross_sections_{i + 1}.png", bbox_inches="tight")
+            plt.close()
+            x_lim_left = x_lim_right
