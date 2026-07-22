@@ -6,27 +6,35 @@ from src.helpers import line_utils, data_utils, matrix_utils
 from scipy.stats import genextreme, norm
 from numpy.lib.stride_tricks import sliding_window_view
 
-# Spectral and Spatial Statistical Estimators for quantifying interpolation uncertainty
+# Spectral and spatial statistical estimators for quantifying interpolation uncertainty.
+# These functions transform bathymetric strips into uncertainty estimates by
+# comparing observed values with a locally interpolated reference signal.
 def compute_energy(data: np.ndarray,
                    resolution: int,
                    method: str,
                    window_values: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
     """
-    Compute FFT energy using 'method' process
+    Compute the frequency-domain energy of a signal after tapering.
+
+    The result is used to estimate how much variance is present at each
+    wavelength scale, which is then converted into an uncertainty surface.
 
     Parameters
     ----------
-    data : np.array
-           Input data
+    data : np.ndarray
+        One or more bathymetric strips that have been tapered with a window.
     resolution : int
-                 Spatial resoluton of the array
+        Spatial resolution of the data in meters per sample.
     method : str
-             FFT Method used to estimate signal energy
+        FFT-based energy method to use. The implementation supports the
+        spectral estimators used in the manuscript workflow.
+    window_values : np.ndarray
+        Tapering window applied to the signal prior to the transform.
 
     Returns
     -------
-    np.array
-            Spectral energy in the signal
+    tuple[np.ndarray, np.ndarray]
+        Spectral energy values and the corresponding frequency vector.
     """
 
     rfft_values = np.abs(np.fft.rfft(data, axis=1))
@@ -45,7 +53,10 @@ def compute_energy(data: np.ndarray,
 #
 def create_spatial_signal(resolution: int, max_cell_number: int, line_spacing):
     """
-    Create the distance and frequency dependent scaling factors.
+    Create a wavelength-dependent spatial scaling signal.
+
+    The returned signal is used to weight spectral energy according to the
+    expected structure of the seabed at different spatial scales.
     """
     frequencies = np.fft.rfftfreq(max_cell_number, resolution)
     distances = np.arange(max_cell_number) * resolution
@@ -68,30 +79,33 @@ def spectral_estimator(
     selection: str = "half",
 ) -> np.ndarray:
     """
-    Estimate the uncertainty using FFT
+    Estimate uncertainty from the spectral structure of a bathymetric strip.
+
+    The input strip is tapered, transformed into the frequency domain, and then
+    converted into a strip of uncertainty values that can be compared against
+    residuals from the interpolation workflow.
 
     Parameters
     ----------
-    data : np.array
-           Input data for FFT estimation
+    data : np.ndarray
+        Two-dimensional array of bathymetric values arranged as strips.
     multiple : int
-               Window length as multiple of the linespacing
+        Window length expressed as a multiple of the line spacing.
     resolution : int
-                 Input data resolution for frequency calculation
+        Spatial resolution of the input data in meters per sample.
     windowing : str
-                Type of window to taper input
-                options: scipy.signal.windows type
+        Windowing function used to reduce edge effects before the transform.
     method : str
-             Type of FFT to estimate energy, defaults to 'amplitude'
-             options: ['amplitude', 'psd', 'spectrum']
-
+        Spectral method to use. Supported values are "PSD95" and "PSD99".
+    selection : str
+        Strategy for selecting frequency contributions. The default uses a
+        symmetric half-spectrum representation.
 
     Returns
     -------
-    output : np.ndarray
-        Uncertainty estimate from the FFT method
-        To be compared with the residual error
-
+    np.ndarray
+        A strip of spectral uncertainty estimates with the same structure as
+        the input data strip.
     """
 
     if data.ndim < 2:
@@ -162,23 +176,30 @@ def statistical_estimator(
     method: str = "SAR",
 ):
     """
-    Efficiently compute uncertainty estimates statistically using sliding window
+    Estimate uncertainty from spatial statistics in a sliding-window fashion.
+
+    This method evaluates local variability in the bathymetric strip by
+    computing range-based statistics across multiple window sizes. The
+    resulting estimates are used as a complementary uncertainty measure to the
+    spectral approach.
 
     Parameters
     ----------
     data : np.ndarray
-        2D array of shape (num_lines, num_samples).
+        Two-dimensional array of shape (num_lines, num_samples).
+    line_spacing : float or int
+        The target line spacing used to interpret the spatial scale.
     min_window : int
-        Minimum window length to start sliding over.
+        Minimum window length to begin the sliding-window calculation.
     multiple : int
         Multiplier controlling the spacing of the windows.
     method : str
-        One of ['diff', 'std', 'gev', 'gaussian'].
+        One of "SAR", "SER", "SMR", or "ALL".
 
     Returns
     -------
-    Tuple of np.ndarray
-        Depending on `method`, returns corresponding uncertainty statistics.
+    np.ndarray or tuple[np.ndarray, np.ndarray, np.ndarray]
+        The requested uncertainty statistic or all three statistics.
     """
 
     num_lines, num_samples = data.shape
@@ -234,23 +255,25 @@ def statistical_estimator(
 
 def compute_residual(data_strip: np.ndarray, normalize_residual=False) -> tuple[np.ndarray, np.ndarray]:
     """
-    Compute the residual error from estimating the data using
-    linear interpolation
+    Compute the residual error between the observed strip and a linear interpolation.
 
-    This function computes the estimate for the data strip
-    using the edge values and returns the residual error
+    The function uses the first and last values of each row as the endpoints of a
+    linear interpolation and returns the resulting residual. These residuals are
+    later used as the reference signal for uncertainty estimation.
 
     Parameters
     ----------
-
-    data_strip : np.array
-                 Bathymetric data strips re-aranged to a single strip
+    data_strip : np.ndarray
+        Bathymetric data arranged as a strip with one value per sample along the
+        across-track direction.
+    normalize_residual : bool
+        If True, convert the residual to a percent-based value relative to the
+        observed data.
 
     Returns
     -------
-    residual : np.array
-               Difference of the interpolation from the input data strip
-
+    tuple[np.ndarray, np.ndarray]
+        Residual values and the corresponding linearly interpolated values.
     """
 
     interpolated_strip = np.linspace(start=data_strip[:, 0],

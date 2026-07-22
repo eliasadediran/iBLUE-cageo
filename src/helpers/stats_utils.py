@@ -140,9 +140,6 @@ def uncertainty_comparison_for_multi(residuals, uncertainties, interp_mask, thre
     # --- Gaussian references ---
     ref = {"Mean": 0.0, "Variance": 1.0, "Coverage_1sigma": 0.6827, "Coverage_2sigma": 0.9545, "Coverage_3sigma": 0.9973,}
 
-    # threshold
-    # thresholds = (3, 5, 10)
-
     # Tail references
     ref_tails = {3: 0.0027, 5: 5.733e-7, 10: 7.62e-24}
 
@@ -493,6 +490,11 @@ def evaluate_uncertainty_model(residuals, uncertainty, label, outdir, extent, nd
     # =====================
     # Plot: PDF
     # =====================
+    parameters = {'axes.labelsize': 14,
+                'axes.titlesize': 14,
+                'xtick.labelsize': 12,
+                'ytick.labelsize': 12}
+    plt.rcParams.update(parameters)
     if plot:
         for clip_range in clip_ranges:
             # plt.figure(figsize=(8, 6))
@@ -521,11 +523,7 @@ def evaluate_uncertainty_model(residuals, uncertainty, label, outdir, extent, nd
     # =====================
     # if plot and spatial_shape is not None:
     if plot:
-        parameters = {'axes.labelsize': 14,
-                      'axes.titlesize': 14,
-                      'xtick.labelsize': 12,
-                      'ytick.labelsize': 12}
-        plt.rcParams.update(parameters)
+
         for t in thresholds:
             mask = (np.abs(z) > t).astype(float)
 
