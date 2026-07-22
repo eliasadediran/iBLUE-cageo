@@ -1,3 +1,6 @@
+import os
+from pathlib import Path
+
 import numpy as np
 import matplotlib.pyplot as plt
 import pandas as pd
@@ -6,14 +9,25 @@ from scipy import stats
 
 def compute_2d_psd(bathy, dx=1.0, dy=1.0, window=True):
     """
-    Compute 2D PSD of bathymetry (power per unit area vs wavenumber).
-    Returns:
-      Pk2d: 2D PSD array (same shape as bathy)
-      kx, ky: 2D wavenumber grids (rad/m)
-      K: radial wavenumber grid
-    Notes:
-      - bathy should be detrended (we detrend with a 2D linear fit here).
-      - windowing reduces spectral leakage.
+    Compute a two-dimensional power spectral density (PSD) estimate of a bathymetry surface.
+
+    The bathymetry is detrended with a plane fit, tapered with a Hann window,
+    and transformed into the frequency domain. The result is later reduced to a
+    radial spectrum to estimate the seabed's spectral slope.
+
+    Parameters
+    ----------
+    bathy : np.ndarray
+        Two-dimensional bathymetric surface.
+    dx, dy : float
+        Spatial sampling interval in the x and y directions.
+    window : bool
+        If True, apply a tapering window to reduce spectral leakage.
+
+    Returns
+    -------
+    tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]
+        PSD grid, x-wavenumber grid, y-wavenumber grid, and radial wavenumber grid.
     """
     ny, nx = bathy.shape
     # detrend (remove plane)
@@ -47,25 +61,16 @@ def compute_2d_psd(bathy, dx=1.0, dy=1.0, window=True):
     Kx, Ky = np.meshgrid(kx, ky, indexing='xy')
     K = np.sqrt(Kx**2 + Ky**2)
 
-    # Parseval
-    dkx = 1 / (nx * dx)
-    dky = 1 / (ny * dy)
-
-    variance_psd = np.sum(P2) * dkx * dky
-    variance_spatial = np.var(z)
-    # variance_spatial = np.var(z)*1/np.sqrt(U)
-    # if window:
-    #     variance_spatial = np.var(z_detrend)
-    # else:
-    #     variance_spatial = np.var(z_detrend)
-
-    # print(variance_spatial, variance_psd)
-
     return P2, Kx, Ky, K
 
 
 def radial_average(P2, K, nbins=200, min_counts=10, verbose=False):
-    """Compute radial average of 2D PSD -> 1D PSD(Pk) vs k (rad/m) with bin counts."""
+    """
+    Reduce a 2D PSD to a 1D radial spectrum.
+
+    The PSD is binned by radial wavenumber so that the seabed's spectral slope
+    can be estimated from a compact representation of the power spectrum.
+    """
     kflat = K.ravel()
     Pflat = P2.ravel()
     # mask zero
@@ -97,10 +102,11 @@ def radial_average(P2, K, nbins=200, min_counts=10, verbose=False):
 
 def fit_powerlaw(k, Pk, counts=None, kmin_pct=10, kmax_pct=85, min_counts=10):
     """
-    Fit a linear fit to log10(Pk) = intercept + slope * log10(k) using a stable inertial range.
-    Automatically selects k_fit_min/k_fit_max based on percentiles and minimum bin counts.
+    Fit a power-law model to the radial PSD.
 
-    Returns slope_beta (positive) such that P ~ k^-beta
+    The spectral slope is estimated from a stable band of wavenumbers, and the
+    fitted slope is interpreted as the seabed complexity descriptor used to
+    classify the morphology regime.
     """
     if counts is None:
         counts = np.ones_like(Pk)  # fallback if no info
@@ -121,6 +127,15 @@ def fit_powerlaw(k, Pk, counts=None, kmin_pct=10, kmax_pct=85, min_counts=10):
     return beta, intercept, r, k[sel].min(), k[sel].max()
 
 def seabed_classifier(bathy, outdir, resolution, seabed, title, nbins=200, kmin_pct=10, kmax_pct=85, min_counts=15,  plot=True):
+    """
+    Classify a bathymetric surface into a low- or high-complexity morphological regime.
+
+    The function computes a 2D PSD, reduces it to a radial spectrum, fits a
+    power-law model, and returns the estimated spectral slope. This slope is
+    then used to choose the appropriate uncertainty estimator in the workflow.
+    """
+    outdir_path = Path(outdir)
+    outdir_path.mkdir(parents=True, exist_ok=True)
     P2, Kx, Ky, K = compute_2d_psd(bathy, dx=resolution, dy=resolution, window=True)
     k, Pk, counts, kmin_raw, kmax_raw = radial_average(P2, K, nbins=nbins, min_counts=10, verbose=False)
     # pick fit band visually or automatically: skip extreme low and high k
@@ -134,7 +149,7 @@ def seabed_classifier(bathy, outdir, resolution, seabed, title, nbins=200, kmin_
     if plot:
         fig, ax = plt.subplots(1,2, figsize=(9,3.5))
         ax[0].imshow(np.log10(P2 + 1e-20), origin='lower', extent=[Kx.min(), Kx.max(), Ky.min(), Ky.max()])
-        ax[0].set_title('log10 2D PSD in k-space (rad/m)')
+        ax[0].set_title('log10 2D PSD in k-space')
         ax[0].set_xlabel('kx (rad/m)')
         ax[0].set_ylabel('ky (rad/m)')
         # plot fitted line
@@ -144,15 +159,12 @@ def seabed_classifier(bathy, outdir, resolution, seabed, title, nbins=200, kmin_
         ax[1].loglog(xfit, yfit, '--r', label=f'fit beta={beta:.2f}\nintercept={intercept_log10:.2f}')
         ax[1].axvline(kmin_fit, color='b', linestyle=':', label=f'lower band')
         ax[1].axvline(kmax_fit, color='g', linestyle=':', label=f'upper band')
-        ax[1].legend()
+        ax[1].legend(frameon=True, fontsize=8)
         ax[1].set_title(f'{seabed.capitalize()} Radial PSD and fit ({nbins}bins)')
         ax[1].set_xlabel('Wavenumber k (rad/m)')
-        # ax[1].set_ylabel('P(k) (m^3·rad^-1)')
-        # ax[1].set_ylabel(r'$\mathregular{P(k)\;(m^3\,rad^{-1})}$')
         ax[1].set_ylabel(r'$P(k)$ (m$^3$ rad$^{-1}$)')
-        # ax[1].set_ylabel(r'$P(k)$ (m$^3$ rad$^{-1}$)')
         plt.tight_layout()
-        plt.savefig(f"{outdir}{title}_{nbins}bins_selectk.png",dpi=300, bbox_inches="tight")
+        plt.savefig(os.path.join(outdir, f"{title}_{nbins}bins_selectk.png"), dpi=300, bbox_inches="tight")
         plt.close(fig)
 
     out = dict(
@@ -162,8 +174,6 @@ def seabed_classifier(bathy, outdir, resolution, seabed, title, nbins=200, kmin_
         depth_mean = depth_mean, depth_std = depth_std, depth_range=depth_range, depth_max=depth_max, depth_min=depth_min)
 
     df = pd.DataFrame([out])
-    df.to_csv(f'{outdir}{title}_{nbins}bins_allk.csv', index=False)
+    df.to_csv(os.path.join(outdir, f"{title}_{nbins}bins_selectk.csv"), index=False)
 
-    # df = pd.DataFrame([out])
-    # df.to_csv(f'{outdir}{title}_{nbins}bins_selectk.csv', index=False)
     return np.round(beta,3)
