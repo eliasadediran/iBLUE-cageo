@@ -5,6 +5,9 @@ import matplotlib.pyplot as plt
 from scipy.stats import norm, gaussian_kde
 from openpyxl import Workbook
 from src.helpers import plot_utils
+# remove later
+from src.helpers import line_utils, data_utils, matrix_utils, plot_utils
+from src.algorithms import classifier, estimators, reconstructor
 
 def bootstrap_by_gaps(
     residuals,
@@ -417,6 +420,189 @@ def multi_uncertainty_comparison(
         plt.show()
     # return results
 
+
+def uncertainty_comparison(residuals, uncertainties, interp_mask=None, eps=1e-12):
+
+    # -------------------------------------------------
+    # VALID MASK
+    # -------------------------------------------------
+    if interp_mask is None:
+        interp_mask = np.zeros_like(residuals, dtype=bool)
+
+    # valid = (~interp_mask) & np.isfinite(residuals) & np.isfinite(uncertainties) & (residuals != 0)
+    # valid = (residuals != 0) & np.isfinite(residuals) & np.isfinite(uncertainties)
+    # valid = (residuals != 0) & (uncertainties != 0) & np.isfinite(residuals) & np.isfinite(uncertainties)
+    valid = (~interp_mask) & np.isfinite(residuals) & np.isfinite(uncertainties)
+
+    abs_res = np.abs(residuals[valid])
+    unc = uncertainties[valid]
+
+
+    # Tail distribution
+    # --- Normalize ---
+    z = (residuals / uncertainties)
+    z = z[valid]
+    z = z[np.isfinite(z)]
+    z_flat = z.flatten()
+
+    # --- Stats ---
+    mean_z = np.mean(z_flat)
+    var_z = np.var(z_flat)
+    # alpha = np.sqrt(np.mean(z_flat ** 2))
+    # cov1 = np.mean(np.abs(z_flat) <= 1)
+    # cov2 = np.mean(np.abs(z_flat) <= 2)
+    # cov3 = np.mean(np.abs(z_flat) <= 3)
+
+    # --- Tails ---
+    # --- Total count ---
+    N = len(z_flat)
+
+    # --- Gaussian references ---
+    ref = {
+        "Mean": 0.0,
+        "Variance": 1.0,
+        "Coverage_1sigma": 0.6827,
+        "Coverage_2sigma": 0.9545,
+        "Coverage_3sigma": 0.9973,
+    }
+
+    # threshold
+    thresholds = (3, 5, 10)
+
+    # Tail references
+    ref_tails = {3: 0.0027, 5: 5.733e-7, 10: 7.62e-24  # effectively zero
+                 }
+
+    tails = {t: np.mean(np.abs(z_flat) > t) for t in thresholds}
+
+    # --- Counts ---
+    tail_counts = {t: int(np.sum(np.abs(z_flat) > t)) for t in thresholds}
+
+    # --- Ratios vs Gaussian ---
+    tail_ratios = {
+        t: tails[t] / ref_tails[t] if ref_tails[t] > 0 else np.nan
+        for t in thresholds
+    }
+
+    # -------------------------------------------------
+    # UNCERTAINTY RATIO (coverage metric)
+    # -------------------------------------------------
+    ratio = unc / np.maximum(abs_res, eps)
+
+    total_count = ratio.size
+    fail_count = np.sum(ratio < 1)
+
+    pass_percentage = 100 * (1 - fail_count / total_count)
+
+    # -------------------------------------------------
+    # ACCURACY METRICS
+    # -------------------------------------------------
+    diff = unc - abs_res
+
+    rmse = np.sqrt(np.mean(diff**2))
+    mae = np.mean(np.abs(diff))
+    mean_error = np.mean(diff)
+    std_dev = np.std(diff)
+
+    # -------------------------------------------------
+    # SHARPNESS (smaller uncertainty preferred)
+    # -------------------------------------------------
+    sharp = np.mean(unc)
+
+    # -------------------------------------------------
+    # CORRELATION (uncertainty vs error magnitude)
+    # -------------------------------------------------
+    if total_count > 1:
+        corr = np.corrcoef(unc, abs_res)[0, 1]
+    else:
+        corr = np.nan
+
+    # -------------------------------------------------
+    # SEVERITY OF UNDER-ESTIMATION
+    # -------------------------------------------------
+    under_mask = unc < abs_res
+
+    if np.any(under_mask):
+        severity_abs = abs_res[under_mask] - unc[under_mask]
+        severity_rel = severity_abs / np.maximum(abs_res[under_mask], eps)
+
+        severity_mean = np.mean(severity_rel)
+        severity_tail = np.percentile(severity_rel, 95)
+    else:
+        severity_mean = 0.0
+        severity_tail = 0.0
+
+    alpha = 0.8
+    severity_score = (alpha * severity_tail) + ((1 - alpha) * severity_mean)
+
+    kappa = 1.5  # allowable safety margin
+
+    over_mask = unc > (kappa * abs_res)
+
+    if np.any(over_mask):
+        over_abs = unc[over_mask] - (kappa * abs_res[over_mask])
+        over_rel = over_abs / np.maximum(unc[over_mask], eps)
+
+        over_mean = np.mean(over_rel)
+        over_tail = np.percentile(over_rel, 95)
+    else:
+        over_mean = 0.0
+        over_tail = 0.0
+
+    over_penalty = (alpha * over_tail) + ((1 - alpha) * over_mean)
+
+    # -------------------------------------------------
+    # ADDED: reliability score (calibration honesty)
+    # -------------------------------------------------
+    confidence_levels = [0.5, 0.68, 0.9, 0.95, 0.99]
+
+    reliability_errors = []
+
+    r = abs_res
+    u = unc
+
+    for p in confidence_levels:
+        u_p = np.percentile(u, p * 100)
+        empirical_cov = np.mean(r <= u_p)
+        reliability_errors.append(abs(empirical_cov - p))
+
+    reliability_error = np.mean(reliability_errors)
+
+    # -------------------------------------------------
+    # RETURN RESULTS
+    # -------------------------------------------------
+    results = {
+        "total_cts": total_count,
+        "fail_cts": fail_count,
+        "percentage": pass_percentage,
+        "rmse": rmse,
+        "mae": mae,
+        "mean": mean_error,
+        "std_dev": std_dev,
+        "sharp": sharp,
+        "corr": corr,
+        "severity_mean": severity_mean,
+        "severity_tail": severity_tail,
+        "severity_score": severity_score,
+        "over_mean": over_mean,
+        "over_tail": over_tail,
+        "over_penalty": over_penalty,
+        "reliability_error": reliability_error,
+        "mean_norm_res": mean_z,
+        "var_norm_res": var_z,
+        "Total_N": N}
+
+    for t in thresholds:
+        results.update({
+            f"P_gt_{t}": tails[t],
+            f"Gaussian_{t}": ref_tails[t],
+            f"Ratio_{t}": tail_ratios[t],
+            f"Count_{t}": tail_counts[t],
+        })
+
+    return results, unc, abs_res
+
+
 def evaluate_uncertainty_model(residuals, uncertainty, label, outdir, extent, ndv, xsize, ysize, res, seabed_name, spacing, interp_mask = None, thresholds=(3, 5), clip_ranges=None, plot=True,
 ):
 
@@ -586,3 +772,101 @@ def evaluate_uncertainty_model(residuals, uncertainty, label, outdir, extent, nd
         "tails": tails,
         "asymmetry": (pos_mean, neg_mean),
     }
+
+
+def export_uncertainty_results(results, csv_path="uncertainty_comparison_results.csv", sort_by="method", bootstrap=False):
+    """
+    Convert a list of uncertainty comparison results into a sorted and flattened CSV table.
+
+    Parameters
+    ----------
+    results : list of dict
+        List containing entries with 'filename', 'linespacing', 'method', and nested 'stats'.
+    csv_path : str, optional
+        Path to save the CSV file (default is 'uncertainty_comparison_results.csv').
+    sort_by : str, optional
+        Field to sort by, e.g., 'method', 'percentage', or 'rmse'. Default is 'method'.
+
+    Returns
+    -------
+    pd.DataFrame
+        The flattened and sorted DataFrame of results.
+    """
+
+    # Optional renaming for nicer output
+    method_map = {
+        "amplitude": "ASD",
+        "psd": "PSD",
+        "diff_mean": "SAR",
+        "diff_max": "SMR",
+        "diff_envelope1": "SER",
+    }
+
+    thresholds = (3,5,10)
+
+    # Flatten the results
+    flat_results = []
+    for r in results:
+        stats = r["stats"]
+        row = {
+            "Seabed": r["filename"].replace(".tif", ""),
+            "Method": method_map.get(r["method"], r["method"]),
+            "Sampling": r["sampling_method"],
+            "Spacing": r["linespacing"],
+            "Pass": float(stats["percentage"]),
+            "RMSE": float(stats["rmse"]),
+            "MAE": float(stats["mae"]),
+            "Bias": float(stats["mean"]),
+            "Std": float(stats["std_dev"]),
+            "Sharpness": float(stats["sharp"]),
+            "Correlation": float(stats["corr"]),
+            "Severity_mean": float(stats["severity_mean"]),
+            "Severity_tail": float(stats["severity_tail"]),
+            "Severity_score": float(stats["severity_score"]),
+            "Over_mean": float(stats["over_mean"]),
+            "Over_tail": float(stats["over_tail"]),
+            "Over_penalty": float(stats["over_penalty"]),
+            "Reliability_error": float(stats["reliability_error"]),
+            "Mean_norm_res": float(stats["mean_norm_res"]),
+            "Var_norm_res": float(stats["var_norm_res"]),
+
+            "Total_N": int(stats["Total_N"]),
+            "Uncertainty": r["uncertainty"],
+            "Residuals": r["residuals"]
+        }
+
+        for t in thresholds:
+            row.update({
+                f"P_gt_{t}": stats[f"P_gt_{t}"],
+                f"Gaussian_{t}": stats[f"Gaussian_{t}"],
+                f"Ratio_{t}": stats[f"Ratio_{t}"],
+                f"Count_{t}": stats[f"Count_{t}"],
+            })
+
+        if bootstrap:
+            ci_stats = r["ci_stats"]
+            row.update({
+            "CI_Pass Mean": float(ci_stats["mean"]),
+            "CI_Lower": float(ci_stats["ci_lower"]),
+            "CI_Upper": float(ci_stats["ci_upper"]),
+            "CI_Std": float(ci_stats["std"]),
+            "Boot": (ci_stats["boot"]),})
+
+        flat_results.append(row)
+
+    # Convert to DataFrame
+    df = pd.DataFrame(flat_results)
+
+    # Sort the DataFrame
+    if sort_by in df.columns:
+        df = df.sort_values(by=sort_by, ascending=True)
+    elif sort_by == "method":
+        df = df.sort_values(by="Method", ascending=True)
+
+    # Export to CSV
+    df.to_excel(csv_path, index=False)
+    print(f"Results exported to: {csv_path}")
+
+    return df, csv_path
+
+

@@ -5,7 +5,6 @@ def get_column_indices(
     array_len: int,
     resolution: int,
     linespacing_meters: int,
-    max_multiple: int,
 ) -> np.ndarray:
     """
     Determine indices of the columns to be used as sampling lines
@@ -44,7 +43,7 @@ def get_column_indices(
 
     # Valid sampling columns is determined by the window length
     # Window lengths are multiples of the linespacing
-    window_size_pixels = linespacing_in_pixels * max_multiple
+    window_size_pixels = linespacing_in_pixels
     start_col = int(
         (window_size_pixels // 2) -
         (linespacing_in_pixels // 2)
@@ -230,3 +229,13 @@ def strip2matrix(
     output[:, column_indices[0]:column_indices[-1]+1] = unstripped
 
     return output
+
+
+def transform_matrix(matrix_data, row_indices):
+    matrix_data_rows = matrix_data[row_indices[:-1], :]
+    n_times = int(row_indices[1] - row_indices[0])
+    matrix_data_tiles = np.repeat(matrix_data_rows, n_times, axis=0)
+    matrix_data[:row_indices[0], :] = np.nan
+    matrix_data[row_indices[-1]:, :] = np.nan
+    matrix_data[row_indices[0]:row_indices[-1], :] = matrix_data_tiles
+    return matrix_data
