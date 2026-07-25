@@ -268,7 +268,7 @@ def plot_pass_by_method_grouped_spacing(
         if outdir:
             out_path = (
                 Path(outdir)
-                / f"{seabed}_{pass_percent}pct_grouped_spacing_{sampling}_1.png"
+                / f"{seabed}_multi_pass coverages.png"
             )
 
             fig.savefig(
@@ -787,7 +787,7 @@ def systematic_weight_sweep(
 
     # === Save ===
     if save_csv:
-        excel_path = f"{out_prefix}_weights_sensitivity_results.xlsx"
+        excel_path = f"{out_prefix}"
         with pd.ExcelWriter(excel_path, engine="xlsxwriter") as writer:
             df_stats.to_excel(writer, sheet_name="Statistics", index=False)
             results_df.to_excel(writer, sheet_name="Results", index=False)

@@ -164,7 +164,7 @@ def seabed_classifier(bathy, outdir, resolution, seabed, title, nbins=200, kmin_
         ax[1].set_xlabel('Wavenumber k (rad/m)')
         ax[1].set_ylabel(r'$P(k)$ (m$^3$ rad$^{-1}$)')
         plt.tight_layout()
-        plt.savefig(os.path.join(outdir, f"{title}_{nbins}bins_selectk.png"), dpi=300, bbox_inches="tight")
+        plt.savefig(os.path.join(outdir, f"{title}_{nbins}bins.png"), dpi=300, bbox_inches="tight")
         plt.close(fig)
 
     out = dict(
@@ -174,6 +174,6 @@ def seabed_classifier(bathy, outdir, resolution, seabed, title, nbins=200, kmin_
         depth_mean = depth_mean, depth_std = depth_std, depth_range=depth_range, depth_max=depth_max, depth_min=depth_min)
 
     df = pd.DataFrame([out])
-    df.to_csv(os.path.join(outdir, f"{title}_{nbins}bins_selectk.csv"), index=False)
+    df.to_csv(os.path.join(outdir, f"{title}_{nbins}bins.csv"), index=False)
 
     return np.round(beta,3)

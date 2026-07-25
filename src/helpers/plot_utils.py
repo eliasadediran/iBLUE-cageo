@@ -153,7 +153,7 @@ def plot_figure(array, extent, ndv, outdir, xsize, ysize, res, seabed, spacing, 
     plt.xlabel("Easting (km)")
     plt.ylabel("Northing (km)")
     cb = plt.colorbar(img, pad=0.01)  # pass the 'img' object used to create the colorbar
-    cb.set_label(cb_label, size=12, labelpad=0.01)
+    cb.set_label(cb_label, size=8, labelpad=0.01)
 
     # Add the north arrow
     ax.annotate('N', xy=(0.05, 0.94), xycoords='axes fraction',
@@ -228,6 +228,7 @@ def plot_figure_mask(array, ndv, outdir, extent, xsize, ysize, res, seabed, spac
 
     # Add the scale bar
     scalebar = ScaleBar(1, "m", length_fraction=0.4, height_fraction=0.01, location="lower center", font_properties={"size": 8}, sep=1)
+
     # Customize the scale bar properties
     scalebar.set_color(scale_colour)
     scalebar.set_box_color(scale_colour)
@@ -240,7 +241,7 @@ def plot_figure_mask(array, ndv, outdir, extent, xsize, ysize, res, seabed, spac
         ax.text(0.5, 0.1, utm_zone,transform=ax.transAxes, ha='center', va='bottom',fontsize=8, color=scale_colour,
                 bbox=dict(boxstyle='round', fc='none', ec=scale_colour))
 
-    plt.savefig(os.path.join(outdir, f"{seabed}_{title}_{spacing}m.png"), bbox_inches='tight', dpi=600)
+    plt.savefig(os.path.join(outdir, f"{seabed}_{spacing}m_{title}_calibration_spatial_plot.png"), bbox_inches='tight', dpi=600)
     plt.interactive(False)
     plt.show()
     # plt.close()
@@ -333,8 +334,8 @@ def plot_cross_sections(depth,residuals,PSD_uncertainty, SSR_uncertainty, spectr
 
             ax.set_title(f"Row {int(select_row * resolution)}")
 
-            plt.savefig(os.path.join(outdir, f"{seabed}_row_{int(select_row * resolution)}.png"), dpi=300, bbox_inches="tight")
-            plt.close()
+            plt.savefig(os.path.join(outdir, f"{seabed}_{desired_linespacing_meters}m_row_{int(select_row * resolution)}_spatial_plot.png"), dpi=300, bbox_inches="tight")
+            # plt.close()
 
         # --------------------------------------------------------------
         # Cross-section plots
@@ -365,6 +366,6 @@ def plot_cross_sections(depth,residuals,PSD_uncertainty, SSR_uncertainty, spectr
             ax.set_ylabel( "Uncertainty (% of depth)" if normalize_residual else "Uncertainty (m)")
             ax.set_title(f"Residual vs Estimated Uncertainty (Section {i + 1})")
             ax.legend()
-            plt.savefig(os.path.join(outdir, f"{seabed}_{desired_linespacing_meters}m_{int(select_row * resolution)}_cross_sections_{i + 1}.png"), bbox_inches="tight")
-            plt.close()
+            plt.savefig(os.path.join(outdir, f"{seabed}_{desired_linespacing_meters}m_row_{int(select_row * resolution)}_cross_section_{i + 1}.png"), bbox_inches="tight")
+            # plt.close()
             x_lim_left = x_lim_right
