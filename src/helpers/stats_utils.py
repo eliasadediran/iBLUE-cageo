@@ -74,77 +74,81 @@ def bootstrap_by_gaps(
 
     return ci_stats
 
-def uncertainty_comparison_for_multi(residuals, uncertainties, interp_mask, thresholds, eps=1e-12):
+def _compute_uncertainty_metrics(residuals, uncertainties, interp_mask=None, thresholds=(3, 5, 10), eps=1e-12):
 
     if residuals.ndim < 2:
-        residuals = residuals.reshape(1,-1)
+        residuals = residuals.reshape(1, -1)
     if uncertainties.ndim < 2:
         uncertainties = uncertainties.reshape(1, -1)
+
+    thresholds = tuple(sorted(thresholds))
 
     if interp_mask is None:
         interp_mask = np.zeros_like(residuals, dtype=bool)
 
     valid = (~interp_mask) & np.isfinite(residuals) & np.isfinite(uncertainties)
-
     abs_res = np.abs(residuals[valid])
     unc = uncertainties[valid]
 
+    ref_tails = {3: 0.0027, 5: 5.733e-7, 10: 7.62e-24}
+
     if unc.size == 0:
-        nan_tail_stats = {
+        tail_stats = {
             "tails": {t: np.nan for t in thresholds},
-            "ref_tails": {3: 0.0027, 5: 5.733e-7, 10: 7.62e-24},
+            "ref_tails": {t: ref_tails.get(t, np.nan) for t in thresholds},
             "tail_ratios": {t: np.nan for t in thresholds},
             "tail_counts": {t: 0 for t in thresholds},
         }
-        return (
-            np.nan, np.nan, np.nan, np.nan, np.nan,
-            np.nan, np.nan, np.nan, np.nan, np.nan,
-            np.nan, np.nan, np.nan, np.nan, nan_tail_stats,
-        )
+        results = {
+            "total_cts": 0,
+            "fail_cts": 0,
+            "percentage": np.nan,
+            "rmse": np.nan,
+            "mae": np.nan,
+            "mean": np.nan,
+            "std_dev": np.nan,
+            "sharp": np.nan,
+            "corr": np.nan,
+            "severity_mean": np.nan,
+            "severity_tail": np.nan,
+            "severity_score": np.nan,
+            "over_mean": np.nan,
+            "over_tail": np.nan,
+            "over_penalty": np.nan,
+            "reliability_error": np.nan,
+            "mean_norm_res": np.nan,
+            "var_norm_res": np.nan,
+            "Total_N": 0,
+            "tail_stats": tail_stats,
+        }
+        for t in thresholds:
+            results.update({
+                f"P_gt_{t}": np.nan,
+                f"Gaussian_{t}": ref_tails.get(t, np.nan),
+                f"Ratio_{t}": np.nan,
+                f"Count_{t}": 0,
+            })
+        return results, unc, abs_res
 
-    # -------------------------------------------------
-    # UNCERTAINTY RATIO (coverage metric)
-    # -------------------------------------------------
     ratio = unc / np.maximum(abs_res, eps)
-
     total_count = ratio.size
     fail_count = np.sum(ratio < 1)
-
     pass_percentage = 100 * (1 - fail_count / total_count) if total_count > 0 else np.nan
 
-    # -------------------------------------------------
-    # ACCURACY METRICS
-    # -------------------------------------------------
     diff = unc - abs_res
-
     rmse = np.sqrt(np.mean(diff ** 2))
     mae = np.mean(np.abs(diff))
     mean_error = np.mean(diff)
     std_dev = np.std(diff)
-
-    # -------------------------------------------------
-    # SHARPNESS (smaller uncertainty preferred)
-    # -------------------------------------------------
     sharp = np.mean(unc)
+    corr = np.corrcoef(unc, abs_res)[0, 1] if total_count > 1 else np.nan
 
-    # -------------------------------------------------
-    # CORRELATION (uncertainty vs error magnitude)
-    # -------------------------------------------------
-    if total_count > 1:
-        corr = np.corrcoef(unc, abs_res)[0, 1]
-    else:
-        corr = np.nan
-
-    # Tail distribution
-    # --- Normalize ---
-    # Guard division to avoid RuntimeWarning for zero/near-zero uncertainties.
     safe_unc = np.where(np.abs(uncertainties) > eps, uncertainties, np.nan)
     z = np.divide(residuals, safe_unc, out=np.full_like(residuals, np.nan, dtype=float), where=np.isfinite(safe_unc))
     z = z[valid]
     z = z[np.isfinite(z)]
     z_flat = z.flatten()
 
-    # --- Stats ---
     if z_flat.size > 0:
         mean_z = np.mean(z_flat)
         var_z = np.var(z_flat)
@@ -152,40 +156,24 @@ def uncertainty_comparison_for_multi(residuals, uncertainties, interp_mask, thre
         mean_z = np.nan
         var_z = np.nan
 
-    # --- Tails ---
-    # --- Total count ---
     N = len(z_flat)
-
-    # --- Gaussian references ---
-    ref = {"Mean": 0.0, "Variance": 1.0, "Coverage_1sigma": 0.6827, "Coverage_2sigma": 0.9545, "Coverage_3sigma": 0.9973,}
-
-    # Tail references
-    ref_tails = {3: 0.0027, 5: 5.733e-7, 10: 7.62e-24}
-
     tails = {t: np.mean(np.abs(z_flat) > t) if z_flat.size > 0 else np.nan for t in thresholds}
-
-    # --- Counts ---
     tail_counts = {t: int(np.sum(np.abs(z_flat) > t)) for t in thresholds}
-
-    # --- Ratios vs Gaussian ---
-    tail_ratios = {t: tails[t] / ref_tails[t] if ref_tails[t] > 0 else np.nan for t in thresholds}
-
+    tail_ratios = {
+        t: tails[t] / ref_tails[t] if (ref_tails.get(t) is not None and ref_tails[t] > 0) else np.nan
+        for t in thresholds
+    }
     tail_stats = {
         "tails": tails,
-        "ref_tails": ref_tails,
+        "ref_tails": {t: ref_tails.get(t, np.nan) for t in thresholds},
         "tail_ratios": tail_ratios,
-        "tail_counts": tail_counts
+        "tail_counts": tail_counts,
     }
 
-    # -------------------------------------------------
-    # SEVERITY OF UNDER-ESTIMATION
-    # -------------------------------------------------
     under_mask = unc < abs_res
-
     if np.any(under_mask):
         severity_abs = abs_res[under_mask] - unc[under_mask]
         severity_rel = severity_abs / np.maximum(abs_res[under_mask], eps)
-
         severity_mean = np.mean(severity_rel)
         severity_tail = np.percentile(severity_rel, 95)
     else:
@@ -195,40 +183,69 @@ def uncertainty_comparison_for_multi(residuals, uncertainties, interp_mask, thre
     alpha = 0.8
     severity_score = (alpha * severity_tail) + ((1 - alpha) * severity_mean)
 
-    kappa = 1.5  # allowable safety margin
-
+    kappa = 1.5
     over_mask = unc > (kappa * abs_res)
-
     if np.any(over_mask):
         over_abs = unc[over_mask] - (kappa * abs_res[over_mask])
         over_rel = over_abs / np.maximum(unc[over_mask], eps)
-
         over_mean = np.mean(over_rel)
         over_tail = np.percentile(over_rel, 95)
     else:
         over_mean = 0.0
         over_tail = 0.0
-
     over_penalty = (alpha * over_tail) + ((1 - alpha) * over_mean)
 
-    # -------------------------------------------------
-    # ADDED: reliability score (calibration honesty)
-    # -------------------------------------------------
     confidence_levels = [0.5, 0.68, 0.9, 0.95, 0.99]
-
     reliability_errors = []
-
-    r = abs_res
-    u = unc
-
     for p in confidence_levels:
-        u_p = np.percentile(u, p * 100)
-        empirical_cov = np.mean(r <= u_p)
+        u_p = np.percentile(unc, p * 100)
+        empirical_cov = np.mean(abs_res <= u_p)
         reliability_errors.append(abs(empirical_cov - p))
+    reliability_error = np.mean(reliability_errors) if reliability_errors else np.nan
 
-    reliability_error = np.mean(reliability_errors)
+    results = {
+        "total_cts": total_count,
+        "fail_cts": fail_count,
+        "percentage": pass_percentage,
+        "rmse": rmse,
+        "mae": mae,
+        "mean": mean_error,
+        "std_dev": std_dev,
+        "sharp": sharp,
+        "corr": corr,
+        "severity_mean": severity_mean,
+        "severity_tail": severity_tail,
+        "severity_score": severity_score,
+        "over_mean": over_mean,
+        "over_tail": over_tail,
+        "over_penalty": over_penalty,
+        "reliability_error": reliability_error,
+        "mean_norm_res": mean_z,
+        "var_norm_res": var_z,
+        "Total_N": N,
+        "tail_stats": tail_stats,
+    }
 
-    return pass_percentage, rmse, mae, mean_error, std_dev, sharp, corr, severity_mean, severity_tail, severity_score, over_mean, over_tail, over_penalty, reliability_error, tail_stats
+    for t in thresholds:
+        results.update({
+            f"P_gt_{t}": tails[t],
+            f"Gaussian_{t}": ref_tails.get(t, np.nan),
+            f"Ratio_{t}": tail_ratios[t],
+            f"Count_{t}": tail_counts[t],
+        })
+
+    return results, unc, abs_res
+
+
+def uncertainty_comparison_for_multi(residuals, uncertainties, interp_mask, thresholds, eps=1e-12):
+    return uncertainty_comparison(
+        residuals,
+        uncertainties,
+        interp_mask=interp_mask,
+        eps=eps,
+        thresholds=thresholds,
+        output_format="multi",
+    )
 
 
 def multi_uncertainty_comparison(
@@ -282,8 +299,10 @@ def multi_uncertainty_comparison(
         # Compute stats
         (pass_percentage, rmse, mae, mean_error, std_dev, sharp, corr, severity_mean,
          severity_tail, severity_score, over_mean, over_tail, over_penalty,
-         reliability_error, tail_stats) = uncertainty_comparison_for_multi(residuals, uncertainty, interp_mask=interp_mask, thresholds=thresholds)
-
+         reliability_error, tail_stats) = uncertainty_comparison( residuals, uncertainty, interp_mask=interp_mask, eps=1e-12, thresholds=thresholds, output_format="multi")
+        #uncertainty_comparison_for_multi(residuals, uncertainty, interp_mask=interp_mask, thresholds=thresholds)
+        
+        
         # Append stats for CSV
         results.append({
             "Seabed": seabed,
@@ -360,7 +379,7 @@ def multi_uncertainty_comparison(
     # ---- Export to CSV ----
     if path:
         df = pd.DataFrame(results)
-        outpath = f'{path}_stats.csv'
+        outpath = f'{path}_statistical_comparison.csv'
         df.to_csv(f'{outpath}', index=False)
         print(f"Statistics exported to {outpath}")
 
@@ -437,225 +456,39 @@ def multi_uncertainty_comparison(
     # return results
 
 
-def uncertainty_comparison(residuals, uncertainties, interp_mask=None, eps=1e-12):
+def uncertainty_comparison(residuals, uncertainties, interp_mask=None, eps=1e-12, thresholds=(3, 5, 10), output_format="dict"):
 
-    # -------------------------------------------------
-    # VALID MASK
-    # -------------------------------------------------
-    if interp_mask is None:
-        interp_mask = np.zeros_like(residuals, dtype=bool)
+    results, unc, abs_res = _compute_uncertainty_metrics(
+        residuals=residuals,
+        uncertainties=uncertainties,
+        interp_mask=interp_mask,
+        thresholds=thresholds,
+        eps=eps,
+    )
 
-    # valid = (~interp_mask) & np.isfinite(residuals) & np.isfinite(uncertainties) & (residuals != 0)
-    # valid = (residuals != 0) & np.isfinite(residuals) & np.isfinite(uncertainties)
-    # valid = (residuals != 0) & (uncertainties != 0) & np.isfinite(residuals) & np.isfinite(uncertainties)
-    valid = (~interp_mask) & np.isfinite(residuals) & np.isfinite(uncertainties)
+    if output_format == "dict":
+        return results, unc, abs_res
 
-    abs_res = np.abs(residuals[valid])
-    unc = uncertainties[valid]
+    if output_format == "multi":
+        return (
+            results["percentage"],
+            results["rmse"],
+            results["mae"],
+            results["mean"],
+            results["std_dev"],
+            results["sharp"],
+            results["corr"],
+            results["severity_mean"],
+            results["severity_tail"],
+            results["severity_score"],
+            results["over_mean"],
+            results["over_tail"],
+            results["over_penalty"],
+            results["reliability_error"],
+            results["tail_stats"],
+        )
 
-    if unc.size == 0:
-        empty_results = {
-            "total_cts": 0,
-            "fail_cts": 0,
-            "percentage": np.nan,
-            "rmse": np.nan,
-            "mae": np.nan,
-            "mean": np.nan,
-            "std_dev": np.nan,
-            "sharp": np.nan,
-            "corr": np.nan,
-            "severity_mean": np.nan,
-            "severity_tail": np.nan,
-            "severity_score": np.nan,
-            "over_mean": np.nan,
-            "over_tail": np.nan,
-            "over_penalty": np.nan,
-            "reliability_error": np.nan,
-            "mean_norm_res": np.nan,
-            "var_norm_res": np.nan,
-            "Total_N": 0,
-        }
-        thresholds = (3, 5, 10)
-        ref_tails = {3: 0.0027, 5: 5.733e-7, 10: 7.62e-24}
-        for t in thresholds:
-            empty_results.update({
-                f"P_gt_{t}": np.nan,
-                f"Gaussian_{t}": ref_tails[t],
-                f"Ratio_{t}": np.nan,
-                f"Count_{t}": 0,
-            })
-        return empty_results, unc, abs_res
-
-
-    # Tail distribution
-    # --- Normalize ---
-    safe_unc = np.where(np.abs(uncertainties) > eps, uncertainties, np.nan)
-    z = np.divide(residuals, safe_unc, out=np.full_like(residuals, np.nan, dtype=float), where=np.isfinite(safe_unc))
-    z = z[valid]
-    z = z[np.isfinite(z)]
-    z_flat = z.flatten()
-
-    # --- Stats ---
-    if z_flat.size > 0:
-        mean_z = np.mean(z_flat)
-        var_z = np.var(z_flat)
-    else:
-        mean_z = np.nan
-        var_z = np.nan
-    # alpha = np.sqrt(np.mean(z_flat ** 2))
-    # cov1 = np.mean(np.abs(z_flat) <= 1)
-    # cov2 = np.mean(np.abs(z_flat) <= 2)
-    # cov3 = np.mean(np.abs(z_flat) <= 3)
-
-    # --- Tails ---
-    # --- Total count ---
-    N = len(z_flat)
-
-    # --- Gaussian references ---
-    ref = {
-        "Mean": 0.0,
-        "Variance": 1.0,
-        "Coverage_1sigma": 0.6827,
-        "Coverage_2sigma": 0.9545,
-        "Coverage_3sigma": 0.9973,
-    }
-
-    # threshold
-    thresholds = (3, 5, 10)
-
-    # Tail references
-    ref_tails = {3: 0.0027, 5: 5.733e-7, 10: 7.62e-24  # effectively zero
-                 }
-
-    tails = {t: np.mean(np.abs(z_flat) > t) if z_flat.size > 0 else np.nan for t in thresholds}
-
-    # --- Counts ---
-    tail_counts = {t: int(np.sum(np.abs(z_flat) > t)) for t in thresholds}
-
-    # --- Ratios vs Gaussian ---
-    tail_ratios = {
-        t: tails[t] / ref_tails[t] if ref_tails[t] > 0 else np.nan
-        for t in thresholds
-    }
-
-    # -------------------------------------------------
-    # UNCERTAINTY RATIO (coverage metric)
-    # -------------------------------------------------
-    ratio = unc / np.maximum(abs_res, eps)
-
-    total_count = ratio.size
-    fail_count = np.sum(ratio < 1)
-
-    pass_percentage = 100 * (1 - fail_count / total_count) if total_count > 0 else np.nan
-
-    # -------------------------------------------------
-    # ACCURACY METRICS
-    # -------------------------------------------------
-    diff = unc - abs_res
-
-    rmse = np.sqrt(np.mean(diff**2))
-    mae = np.mean(np.abs(diff))
-    mean_error = np.mean(diff)
-    std_dev = np.std(diff)
-
-    # -------------------------------------------------
-    # SHARPNESS (smaller uncertainty preferred)
-    # -------------------------------------------------
-    sharp = np.mean(unc)
-
-    # -------------------------------------------------
-    # CORRELATION (uncertainty vs error magnitude)
-    # -------------------------------------------------
-    if total_count > 1:
-        corr = np.corrcoef(unc, abs_res)[0, 1]
-    else:
-        corr = np.nan
-
-    # -------------------------------------------------
-    # SEVERITY OF UNDER-ESTIMATION
-    # -------------------------------------------------
-    under_mask = unc < abs_res
-
-    if np.any(under_mask):
-        severity_abs = abs_res[under_mask] - unc[under_mask]
-        severity_rel = severity_abs / np.maximum(abs_res[under_mask], eps)
-
-        severity_mean = np.mean(severity_rel)
-        severity_tail = np.percentile(severity_rel, 95)
-    else:
-        severity_mean = 0.0
-        severity_tail = 0.0
-
-    alpha = 0.8
-    severity_score = (alpha * severity_tail) + ((1 - alpha) * severity_mean)
-
-    kappa = 1.5  # allowable safety margin
-
-    over_mask = unc > (kappa * abs_res)
-
-    if np.any(over_mask):
-        over_abs = unc[over_mask] - (kappa * abs_res[over_mask])
-        over_rel = over_abs / np.maximum(unc[over_mask], eps)
-
-        over_mean = np.mean(over_rel)
-        over_tail = np.percentile(over_rel, 95)
-    else:
-        over_mean = 0.0
-        over_tail = 0.0
-
-    over_penalty = (alpha * over_tail) + ((1 - alpha) * over_mean)
-
-    # -------------------------------------------------
-    # ADDED: reliability score (calibration honesty)
-    # -------------------------------------------------
-    confidence_levels = [0.5, 0.68, 0.9, 0.95, 0.99]
-
-    reliability_errors = []
-
-    r = abs_res
-    u = unc
-
-    for p in confidence_levels:
-        if u.size > 0:
-            u_p = np.percentile(u, p * 100)
-            empirical_cov = np.mean(r <= u_p)
-            reliability_errors.append(abs(empirical_cov - p))
-
-    reliability_error = np.mean(reliability_errors) if reliability_errors else np.nan
-
-    # -------------------------------------------------
-    # RETURN RESULTS
-    # -------------------------------------------------
-    results = {
-        "total_cts": total_count,
-        "fail_cts": fail_count,
-        "percentage": pass_percentage,
-        "rmse": rmse,
-        "mae": mae,
-        "mean": mean_error,
-        "std_dev": std_dev,
-        "sharp": sharp,
-        "corr": corr,
-        "severity_mean": severity_mean,
-        "severity_tail": severity_tail,
-        "severity_score": severity_score,
-        "over_mean": over_mean,
-        "over_tail": over_tail,
-        "over_penalty": over_penalty,
-        "reliability_error": reliability_error,
-        "mean_norm_res": mean_z,
-        "var_norm_res": var_z,
-        "Total_N": N}
-
-    for t in thresholds:
-        results.update({
-            f"P_gt_{t}": tails[t],
-            f"Gaussian_{t}": ref_tails[t],
-            f"Ratio_{t}": tail_ratios[t],
-            f"Count_{t}": tail_counts[t],
-        })
-
-    return results, unc, abs_res
+    raise ValueError(f"Unknown output_format '{output_format}'. Use 'dict' or 'multi'.")
 
 
 def evaluate_uncertainty_model(residuals, uncertainty, label, outdir, extent, ndv, xsize, ysize, res, seabed_name, spacing, interp_mask = None, thresholds=(3, 5), clip_ranges=None, plot=True,
@@ -744,6 +577,7 @@ def evaluate_uncertainty_model(residuals, uncertainty, label, outdir, extent, nd
                 'xtick.labelsize': 12,
                 'ytick.labelsize': 12}
     plt.rcParams.update(parameters)
+    
     if plot:
         for clip_range in clip_ranges:
             # plt.figure(figsize=(8, 6))
@@ -763,7 +597,7 @@ def evaluate_uncertainty_model(residuals, uncertainty, label, outdir, extent, nd
             plt.legend(fontsize=10)
             plt.grid(False)
 
-            fname = os.path.join(outdir, f"{seabed_name}_{spacing}m_{label}_{clip_range[1]}_pdf.png")
+            fname = os.path.join(outdir, f"{seabed_name}_{spacing}m_{label}_{clip_range[1]}_calibration_pdf.png")
             plt.savefig(fname, dpi=300, bbox_inches="tight")
             # plt.close()
 
@@ -824,7 +658,7 @@ def evaluate_uncertainty_model(residuals, uncertainty, label, outdir, extent, nd
     ws3.append(["Neg_Mean_Abs", neg_mean])
 
     # Save
-    xlsx_path = os.path.join(outdir, f"{seabed_name}_{spacing}m_{label}_stats.xlsx")
+    xlsx_path = os.path.join(outdir, f"{seabed_name}_{spacing}m_{label}_calibration_stats.xlsx")
     wb.save(xlsx_path)
 
     return {
