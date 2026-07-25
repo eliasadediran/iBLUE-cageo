@@ -5,9 +5,6 @@ import matplotlib.pyplot as plt
 from scipy.stats import norm, gaussian_kde
 from openpyxl import Workbook
 from src.helpers import plot_utils
-# remove later
-from src.helpers import line_utils, data_utils, matrix_utils, plot_utils
-from src.algorithms import classifier, estimators, reconstructor
 
 def bootstrap_by_gaps(
     residuals,
@@ -92,6 +89,19 @@ def uncertainty_comparison_for_multi(residuals, uncertainties, interp_mask, thre
     abs_res = np.abs(residuals[valid])
     unc = uncertainties[valid]
 
+    if unc.size == 0:
+        nan_tail_stats = {
+            "tails": {t: np.nan for t in thresholds},
+            "ref_tails": {3: 0.0027, 5: 5.733e-7, 10: 7.62e-24},
+            "tail_ratios": {t: np.nan for t in thresholds},
+            "tail_counts": {t: 0 for t in thresholds},
+        }
+        return (
+            np.nan, np.nan, np.nan, np.nan, np.nan,
+            np.nan, np.nan, np.nan, np.nan, np.nan,
+            np.nan, np.nan, np.nan, np.nan, nan_tail_stats,
+        )
+
     # -------------------------------------------------
     # UNCERTAINTY RATIO (coverage metric)
     # -------------------------------------------------
@@ -100,7 +110,7 @@ def uncertainty_comparison_for_multi(residuals, uncertainties, interp_mask, thre
     total_count = ratio.size
     fail_count = np.sum(ratio < 1)
 
-    pass_percentage = 100 * (1 - fail_count / total_count)
+    pass_percentage = 100 * (1 - fail_count / total_count) if total_count > 0 else np.nan
 
     # -------------------------------------------------
     # ACCURACY METRICS
@@ -127,14 +137,20 @@ def uncertainty_comparison_for_multi(residuals, uncertainties, interp_mask, thre
 
     # Tail distribution
     # --- Normalize ---
-    z = (residuals / uncertainties)
+    # Guard division to avoid RuntimeWarning for zero/near-zero uncertainties.
+    safe_unc = np.where(np.abs(uncertainties) > eps, uncertainties, np.nan)
+    z = np.divide(residuals, safe_unc, out=np.full_like(residuals, np.nan, dtype=float), where=np.isfinite(safe_unc))
     z = z[valid]
     z = z[np.isfinite(z)]
     z_flat = z.flatten()
 
     # --- Stats ---
-    mean_z = np.mean(z_flat)
-    var_z = np.var(z_flat)
+    if z_flat.size > 0:
+        mean_z = np.mean(z_flat)
+        var_z = np.var(z_flat)
+    else:
+        mean_z = np.nan
+        var_z = np.nan
 
     # --- Tails ---
     # --- Total count ---
@@ -146,7 +162,7 @@ def uncertainty_comparison_for_multi(residuals, uncertainties, interp_mask, thre
     # Tail references
     ref_tails = {3: 0.0027, 5: 5.733e-7, 10: 7.62e-24}
 
-    tails = {t: np.mean(np.abs(z_flat) > t) for t in thresholds}
+    tails = {t: np.mean(np.abs(z_flat) > t) if z_flat.size > 0 else np.nan for t in thresholds}
 
     # --- Counts ---
     tail_counts = {t: int(np.sum(np.abs(z_flat) > t)) for t in thresholds}
@@ -437,17 +453,55 @@ def uncertainty_comparison(residuals, uncertainties, interp_mask=None, eps=1e-12
     abs_res = np.abs(residuals[valid])
     unc = uncertainties[valid]
 
+    if unc.size == 0:
+        empty_results = {
+            "total_cts": 0,
+            "fail_cts": 0,
+            "percentage": np.nan,
+            "rmse": np.nan,
+            "mae": np.nan,
+            "mean": np.nan,
+            "std_dev": np.nan,
+            "sharp": np.nan,
+            "corr": np.nan,
+            "severity_mean": np.nan,
+            "severity_tail": np.nan,
+            "severity_score": np.nan,
+            "over_mean": np.nan,
+            "over_tail": np.nan,
+            "over_penalty": np.nan,
+            "reliability_error": np.nan,
+            "mean_norm_res": np.nan,
+            "var_norm_res": np.nan,
+            "Total_N": 0,
+        }
+        thresholds = (3, 5, 10)
+        ref_tails = {3: 0.0027, 5: 5.733e-7, 10: 7.62e-24}
+        for t in thresholds:
+            empty_results.update({
+                f"P_gt_{t}": np.nan,
+                f"Gaussian_{t}": ref_tails[t],
+                f"Ratio_{t}": np.nan,
+                f"Count_{t}": 0,
+            })
+        return empty_results, unc, abs_res
+
 
     # Tail distribution
     # --- Normalize ---
-    z = (residuals / uncertainties)
+    safe_unc = np.where(np.abs(uncertainties) > eps, uncertainties, np.nan)
+    z = np.divide(residuals, safe_unc, out=np.full_like(residuals, np.nan, dtype=float), where=np.isfinite(safe_unc))
     z = z[valid]
     z = z[np.isfinite(z)]
     z_flat = z.flatten()
 
     # --- Stats ---
-    mean_z = np.mean(z_flat)
-    var_z = np.var(z_flat)
+    if z_flat.size > 0:
+        mean_z = np.mean(z_flat)
+        var_z = np.var(z_flat)
+    else:
+        mean_z = np.nan
+        var_z = np.nan
     # alpha = np.sqrt(np.mean(z_flat ** 2))
     # cov1 = np.mean(np.abs(z_flat) <= 1)
     # cov2 = np.mean(np.abs(z_flat) <= 2)
@@ -473,7 +527,7 @@ def uncertainty_comparison(residuals, uncertainties, interp_mask=None, eps=1e-12
     ref_tails = {3: 0.0027, 5: 5.733e-7, 10: 7.62e-24  # effectively zero
                  }
 
-    tails = {t: np.mean(np.abs(z_flat) > t) for t in thresholds}
+    tails = {t: np.mean(np.abs(z_flat) > t) if z_flat.size > 0 else np.nan for t in thresholds}
 
     # --- Counts ---
     tail_counts = {t: int(np.sum(np.abs(z_flat) > t)) for t in thresholds}
@@ -492,7 +546,7 @@ def uncertainty_comparison(residuals, uncertainties, interp_mask=None, eps=1e-12
     total_count = ratio.size
     fail_count = np.sum(ratio < 1)
 
-    pass_percentage = 100 * (1 - fail_count / total_count)
+    pass_percentage = 100 * (1 - fail_count / total_count) if total_count > 0 else np.nan
 
     # -------------------------------------------------
     # ACCURACY METRICS
@@ -562,11 +616,12 @@ def uncertainty_comparison(residuals, uncertainties, interp_mask=None, eps=1e-12
     u = unc
 
     for p in confidence_levels:
-        u_p = np.percentile(u, p * 100)
-        empirical_cov = np.mean(r <= u_p)
-        reliability_errors.append(abs(empirical_cov - p))
+        if u.size > 0:
+            u_p = np.percentile(u, p * 100)
+            empirical_cov = np.mean(r <= u_p)
+            reliability_errors.append(abs(empirical_cov - p))
 
-    reliability_error = np.mean(reliability_errors)
+    reliability_error = np.mean(reliability_errors) if reliability_errors else np.nan
 
     # -------------------------------------------------
     # RETURN RESULTS
@@ -627,11 +682,19 @@ def evaluate_uncertainty_model(residuals, uncertainty, label, outdir, extent, nd
     else:
         valid = np.isfinite(residuals) & np.isfinite(uncertainty)
 
-    z = residuals / uncertainty
+    if not np.any(valid):
+        raise ValueError("No valid residual/uncertainty pairs available for evaluation.")
+
+    eps = np.finfo(float).eps
+    safe_unc = np.where(np.abs(uncertainty) > eps, uncertainty, np.nan)
+    z = np.divide(residuals, safe_unc, out=np.full_like(residuals, np.nan, dtype=float), where=np.isfinite(safe_unc))
 
     # preserve shape
     z = np.where(valid & np.isfinite(z), z, np.nan)
     z_flat = z[~np.isnan(z)]
+
+    if z_flat.size == 0:
+        raise ValueError("No finite normalized residuals after uncertainty sanitization.")
 
     # --- Stats ---
     mean_z = np.mean(z_flat)
