@@ -577,7 +577,7 @@ def evaluate_uncertainty_model(residuals, uncertainty, label, outdir, extent, nd
                 'xtick.labelsize': 12,
                 'ytick.labelsize': 12}
     plt.rcParams.update(parameters)
-    
+
     if plot:
         for clip_range in clip_ranges:
             # plt.figure(figsize=(8, 6))
@@ -710,6 +710,7 @@ def export_uncertainty_results(results, csv_path="uncertainty_comparison_results
             "Method": method_map.get(r["method"], r["method"]),
             "Sampling": r["sampling_method"],
             "Spacing": r["linespacing"],
+            "Spectral_Slope": r["spectral_slope"],
             "Pass": float(stats["percentage"]),
             "RMSE": float(stats["rmse"]),
             "MAE": float(stats["mae"]),

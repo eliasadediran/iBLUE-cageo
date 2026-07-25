@@ -134,8 +134,11 @@ def seabed_classifier(bathy, outdir, resolution, seabed, title, nbins=200, kmin_
     power-law model, and returns the estimated spectral slope. This slope is
     then used to choose the appropriate uncertainty estimator in the workflow.
     """
-    outdir_path = Path(outdir)
-    outdir_path.mkdir(parents=True, exist_ok=True)
+    save_outputs = outdir is not None
+
+    if save_outputs:
+        outdir_path = Path(outdir)
+        outdir_path.mkdir(parents=True, exist_ok=True)
     P2, Kx, Ky, K = compute_2d_psd(bathy, dx=resolution, dy=resolution, window=True)
     k, Pk, counts, kmin_raw, kmax_raw = radial_average(P2, K, nbins=nbins, min_counts=10, verbose=False)
     # pick fit band visually or automatically: skip extreme low and high k
@@ -164,7 +167,8 @@ def seabed_classifier(bathy, outdir, resolution, seabed, title, nbins=200, kmin_
         ax[1].set_xlabel('Wavenumber k (rad/m)')
         ax[1].set_ylabel(r'$P(k)$ (m$^3$ rad$^{-1}$)')
         plt.tight_layout()
-        plt.savefig(os.path.join(outdir, f"{title}_{nbins}bins.png"), dpi=300, bbox_inches="tight")
+        if save_outputs:
+            plt.savefig(os.path.join(outdir, f"{title}_{nbins}bins.png"), dpi=300, bbox_inches="tight")
         plt.close(fig)
 
     out = dict(
@@ -173,7 +177,8 @@ def seabed_classifier(bathy, outdir, resolution, seabed, title, nbins=200, kmin_
         intercept_log10 = intercept_log10, r=r, kmin_fit=kmin_fit, kmax_fit=kmax_fit, kmin_raw=kmin_raw, kmax_raw=kmax_raw,
         depth_mean = depth_mean, depth_std = depth_std, depth_range=depth_range, depth_max=depth_max, depth_min=depth_min)
 
-    df = pd.DataFrame([out])
-    df.to_csv(os.path.join(outdir, f"{title}_{nbins}bins.csv"), index=False)
+    if save_outputs:
+        df = pd.DataFrame([out])
+        df.to_csv(os.path.join(outdir, f"{title}_{nbins}bins.csv"), index=False)
 
     return np.round(beta,3)

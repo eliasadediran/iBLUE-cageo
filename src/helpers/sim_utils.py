@@ -6,18 +6,17 @@ from src.helpers import line_utils, data_utils, matrix_utils, plot_utils, stats_
 from src.algorithms import classifier, estimators, reconstructor
 
 
-def single_run_orthogonal(settings: tuple, data_dir) -> dict:
+def single_run_orthogonal(settings: tuple, data_dir, outdir) -> dict:
 
     filename = settings[0]
     linespacing = settings[1]
     multiple = settings[2]
     fxn = settings[3][0]
-    fxn_method = settings[3][1]
-    if_fft_method = settings[3][2]
+    # fxn_method = settings[3][1]
+    if_fft_method = settings[3][1]
     sampling_method = settings[4]
     normalize_residual = settings[5]
     bootstrap = settings[6]
-  
 
     # load the bathymetry data from the file
     bathy_dict = data_utils.load_file(filename=filename,
@@ -27,6 +26,7 @@ def single_run_orthogonal(settings: tuple, data_dir) -> dict:
     depth = data_utils.remove_edge_Nans(depth=bathy_dict['depth'], ndv=bathy_dict['ndv'])
     resolution = bathy_dict['resolution']
 
+    # Line Selection and Statistical Reconstruction
     column_indices = matrix_utils.get_column_indices(array_len=depth.shape[1],
                                         resolution=resolution,
                                         linespacing_meters=linespacing)
@@ -39,6 +39,25 @@ def single_run_orthogonal(settings: tuple, data_dir) -> dict:
     rows_keep = line_utils.clip_rows_with_ndvs_indices(filled, ndv=bathy_dict['ndv'])
     filled_clipped = filled[rows_keep, :]
     depth = depth[rows_keep,:]
+
+    # Create mask
+    interp_mask = np.zeros(depth.shape, dtype=bool)
+    interp_mask[:, column_indices] = True
+
+    #  Testbed Classifier 
+    spectral_slope = classifier.seabed_classifier(filled_clipped, seabed= filename.replace(".tif", ""), outdir=None, title=None, resolution=resolution, plot=False)
+    if spectral_slope <= 2.7:
+        if if_fft_method:
+            fxn_method = 'PSD95'
+        else:
+            fxn_method = 'SAR'
+    elif spectral_slope > 2.7:
+        if if_fft_method:
+            fxn_method = 'PSD99'
+        else:
+            fxn_method = 'SER'
+
+    # Compute uncertainty
     uncertainty_segment_data = matrix_utils.matrix2strip(filled_clipped,
                                             column_indices=column_indices,
                                             multiple=multiple)
@@ -61,7 +80,6 @@ def single_run_orthogonal(settings: tuple, data_dir) -> dict:
         strip = fxn(data=uncertainty_data,
                     multiple=multiple, method=fxn_method, line_spacing=linespacing)
 
-
     if strip.shape != residual_data.shape:
         raise ValueError(
             f"Uncertainty strip shape {strip.shape} does not match residual data shape {residual_data.shape}",
@@ -75,11 +93,6 @@ def single_run_orthogonal(settings: tuple, data_dir) -> dict:
     output_uncertainty = matrix_utils.strip2matrix(data_strip=strip,
                                       original_shape=depth.shape,
                                       column_indices=column_indices)
-
-
-    # Create mask
-    interp_mask = np.zeros(depth.shape, dtype=bool)
-    interp_mask[:, column_indices] = True
 
     stats, uncertainty_cleaned, residuals_cleaned = stats_utils.uncertainty_comparison(residuals=residuals,
                                               uncertainties=output_uncertainty, interp_mask=interp_mask)
@@ -95,6 +108,7 @@ def single_run_orthogonal(settings: tuple, data_dir) -> dict:
                "residuals": residuals_cleaned,
                "uncertainty": uncertainty_cleaned,
                "stats": stats,
+               "spectral_slope": spectral_slope,
                }
 
     if bootstrap:
