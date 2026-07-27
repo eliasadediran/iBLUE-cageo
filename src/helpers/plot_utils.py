@@ -80,7 +80,7 @@ def plot_figure_scatter(array, percentile, ndv, outdir, coordinate, marker, exte
     plt.xlabel("Easting (km)")
     plt.ylabel("Northing (km)")
     cb = plt.colorbar(scatter, pad=0.01)  # pass the 'img' object used to create the colorbar
-    cb.set_label(cb_label, size=14, labelpad=0.01)
+    cb.set_label(cb_label, size=10, labelpad=0.01)
 
     # Set plot extent
     ulx, lrx, lry, uly = extent
@@ -153,7 +153,7 @@ def plot_figure(array, extent, ndv, outdir, xsize, ysize, res, seabed, spacing, 
     plt.xlabel("Easting (km)")
     plt.ylabel("Northing (km)")
     cb = plt.colorbar(img, pad=0.01)  # pass the 'img' object used to create the colorbar
-    cb.set_label(cb_label, size=8, labelpad=0.01)
+    cb.set_label(cb_label, size=10, labelpad=0.01)
 
     # Add the north arrow
     ax.annotate('N', xy=(0.05, 0.94), xycoords='axes fraction',
