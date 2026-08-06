@@ -333,7 +333,7 @@ def plot_cross_sections(depth,residuals,PSD_uncertainty, SSR_uncertainty, spectr
             ax.set_ylim(depth.shape[0], 0)
 
             ax.set_title(f"Row {int(select_row * resolution)}")
-
+            
             plt.savefig(os.path.join(outdir, f"{seabed}_{desired_linespacing_meters}m_row_{int(select_row * resolution)}_spatial_plot.png"), dpi=300, bbox_inches="tight")
             # plt.close()
 
@@ -360,6 +360,7 @@ def plot_cross_sections(depth,residuals,PSD_uncertainty, SSR_uncertainty, spectr
             ax.set_xticks(xticks)
             ax.set_xticklabels([str(int(x * resolution)) for x in xticks])
 
+            ax.set_grid(True)
             ax.set_xlim(x_lim_left, x_lim_right)
             ax.set_ylim(0, max_value)
             ax.set_xlabel("West-East (m)")
